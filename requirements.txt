@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+boto3
+email-validator
+pytest
+httpx
+python-dotenv
