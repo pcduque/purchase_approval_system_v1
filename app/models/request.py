@@ -22,6 +22,9 @@ class Approver:
     email: str
     approver_token: str
     status: ApprovalStatus
+    otp: str | None = None
+    otp_expires_at: str | None = None
+    otp_validated: bool = False
 
 
 @dataclass(frozen=True)

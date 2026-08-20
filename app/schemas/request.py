@@ -72,3 +72,46 @@ class PurchaseRequestResponse(BaseModel):
     approvers: list[ApproverResponse]
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class MockMailResponse(BaseModel):
+    to: EmailStr
+    approver_name: str
+    subject: str
+    approval_link: str
+    otp: str | None = None
+    otp_expires_at: str | None = None
+
+
+class ApprovalStartRequest(BaseModel):
+    request_id: str
+    approver_token: str
+
+
+class ApprovalStartResponse(BaseModel):
+    message: str
+    expires_in_seconds: int
+
+
+class OtpValidationRequest(BaseModel):
+    request_id: str
+    approver_token: str
+    otp: str
+
+
+class OtpValidationResponse(BaseModel):
+    message: str
+    request_id: str
+    approver_token: str
+
+
+class ApprovalDetailResponse(BaseModel):
+    request_id: str
+    title: str
+    description: str
+    amount: float
+    requester_name: str
+    status: str
+    created_at: str
+
+    model_config = ConfigDict(from_attributes=True)
