@@ -26,6 +26,14 @@ class OtpNotValidatedError(Exception):
     pass
 
 
+class ApprovalAlreadyProcessedError(Exception):
+    pass
+
+
+class RequestAlreadyRejectedError(Exception):
+    pass
+
+
 class RequestService:
     def __init__(self, repository: RequestRepository, approval_base_url: str) -> None:
         self._repository = repository
@@ -65,6 +73,8 @@ class RequestService:
         if approval is None:
             return None
 
+        self._ensure_request_is_not_rejected(request_id)
+
         if approval.status != ApprovalStatus.PENDING:
             raise ApprovalNotPendingError("Approval is not pending")
 
@@ -94,6 +104,8 @@ class RequestService:
         approval = self._repository.get_approval(request_id, approver_token)
         if approval is None:
             return None
+
+        self._ensure_request_is_not_rejected(request_id)
 
         if approval.otp is None or approval.otp_expires_at is None:
             raise OtpNotStartedError("OTP flow has not started")
@@ -129,6 +141,44 @@ class RequestService:
 
         return self._repository.get_by_id(request_id)
 
+    def approve(self, request_id: str, approver_token: str) -> dict | None:
+        signed_at = self._record_approval_decision(
+            request_id=request_id,
+            approver_token=approver_token,
+            new_status=ApprovalStatus.SIGNED,
+            timestamp_field="signed_at",
+        )
+        if signed_at is None:
+            return None
+        all_approvals_signed = self._all_approvals_signed(request_id)
+
+        return {
+            "message": "Approval signed",
+            "request_id": request_id,
+            "approver_token": approver_token,
+            "status": ApprovalStatus.SIGNED.value,
+            "signed_at": signed_at,
+            "all_approvals_signed": all_approvals_signed,
+        }
+
+    def reject(self, request_id: str, approver_token: str) -> dict | None:
+        rejected_at = self._record_approval_decision(
+            request_id=request_id,
+            approver_token=approver_token,
+            new_status=ApprovalStatus.REJECTED,
+            timestamp_field="rejected_at",
+        )
+        if rejected_at is None:
+            return None
+
+        return {
+            "message": "Approval rejected",
+            "request_id": request_id,
+            "approver_token": approver_token,
+            "status": ApprovalStatus.REJECTED.value,
+            "rejected_at": rejected_at,
+        }
+
     def get_mock_mail(self, request_id: str) -> list[dict] | None:
         purchase_request = self._repository.get_by_id(request_id)
         if purchase_request is None:
@@ -151,6 +201,57 @@ class RequestService:
 
     def _generate_otp(self) -> str:
         return f"{secrets.randbelow(1_000_000):06d}"
+
+    def _record_approval_decision(
+        self,
+        request_id: str,
+        approver_token: str,
+        new_status: ApprovalStatus,
+        timestamp_field: str,
+    ) -> str | None:
+        approval = self._repository.get_approval(request_id, approver_token)
+        if approval is None:
+            return None
+
+        self._ensure_request_is_not_rejected(request_id)
+
+        if not approval.otp_validated:
+            raise OtpNotValidatedError("OTP has not been validated")
+
+        if approval.status != ApprovalStatus.PENDING:
+            raise ApprovalAlreadyProcessedError("Approval is not pending")
+
+        timestamp = datetime.now(UTC).isoformat()
+        if new_status == ApprovalStatus.REJECTED:
+            self._repository.reject_approval_and_request(
+                request_id=request_id,
+                approver_token=approver_token,
+                rejected_at=timestamp,
+            )
+        else:
+            self._repository.update_approval_decision(
+                request_id=request_id,
+                approver_token=approver_token,
+                status=new_status.value,
+                timestamp_field=timestamp_field,
+                timestamp=timestamp,
+            )
+        return timestamp
+
+    def _ensure_request_is_not_rejected(self, request_id: str) -> None:
+        purchase_request = self._repository.get_by_id(request_id)
+        if purchase_request is not None and purchase_request.status == RequestStatus.REJECTED:
+            raise RequestAlreadyRejectedError("Request is already rejected")
+
+    def _all_approvals_signed(self, request_id: str) -> bool:
+        purchase_request = self._repository.get_by_id(request_id)
+        if purchase_request is None:
+            return False
+
+        return all(
+            approver.status == ApprovalStatus.SIGNED
+            for approver in purchase_request.approvers
+        )
 
     def _build_approval_link(self, request_id: str, approver_token: str) -> str:
         query_params = urlencode(

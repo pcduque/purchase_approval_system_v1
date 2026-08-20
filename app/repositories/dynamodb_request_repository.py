@@ -48,6 +48,10 @@ class DynamoDBRequestRepository:
             if approver.otp_expires_at is not None:
                 approval_item["otp_expires_at"] = approver.otp_expires_at
             approval_item["otp_validated"] = approver.otp_validated
+            if approver.signed_at is not None:
+                approval_item["signed_at"] = approver.signed_at
+            if approver.rejected_at is not None:
+                approval_item["rejected_at"] = approver.rejected_at
             transact_items.append(
                 {
                     "Put": {
@@ -178,6 +182,87 @@ class DynamoDBRequestRepository:
         except ClientError as exc:
             raise RuntimeError("DynamoDB could not mark OTP as validated") from exc
 
+    def update_approval_decision(
+        self,
+        request_id: str,
+        approver_token: str,
+        status: str,
+        timestamp_field: str,
+        timestamp: str,
+    ) -> None:
+        if timestamp_field not in {"signed_at", "rejected_at"}:
+            raise ValueError("Invalid approval timestamp field")
+
+        try:
+            self._client.update_item(
+                TableName=self._settings.approvals_table_name,
+                Key=self._serialize_item(
+                    {
+                        "request_id": request_id,
+                        "approver_token": approver_token,
+                    }
+                ),
+                UpdateExpression=(
+                    f"SET #status = :status, {timestamp_field} = :timestamp"
+                ),
+                ExpressionAttributeNames={"#status": "status"},
+                ExpressionAttributeValues=self._serialize_item(
+                    {
+                        ":status": status,
+                        ":timestamp": timestamp,
+                    }
+                ),
+            )
+        except ClientError as exc:
+            raise RuntimeError("DynamoDB could not update approval decision") from exc
+
+    def reject_approval_and_request(
+        self,
+        request_id: str,
+        approver_token: str,
+        rejected_at: str,
+    ) -> None:
+        try:
+            self._client.transact_write_items(
+                TransactItems=[
+                    {
+                        "Update": {
+                            "TableName": self._settings.approvals_table_name,
+                            "Key": self._serialize_item(
+                                {
+                                    "request_id": request_id,
+                                    "approver_token": approver_token,
+                                }
+                            ),
+                            "UpdateExpression": (
+                                "SET #status = :approval_status, "
+                                "rejected_at = :rejected_at"
+                            ),
+                            "ExpressionAttributeNames": {"#status": "status"},
+                            "ExpressionAttributeValues": self._serialize_item(
+                                {
+                                    ":approval_status": ApprovalStatus.REJECTED.value,
+                                    ":rejected_at": rejected_at,
+                                }
+                            ),
+                        }
+                    },
+                    {
+                        "Update": {
+                            "TableName": self._settings.requests_table_name,
+                            "Key": self._serialize_item({"request_id": request_id}),
+                            "UpdateExpression": "SET #status = :request_status",
+                            "ExpressionAttributeNames": {"#status": "status"},
+                            "ExpressionAttributeValues": self._serialize_item(
+                                {":request_status": RequestStatus.REJECTED.value}
+                            ),
+                        }
+                    },
+                ]
+            )
+        except ClientError as exc:
+            raise RuntimeError("DynamoDB could not reject approval and request") from exc
+
     def _serialize_item(self, item: dict) -> dict:
         return {key: self._serializer.serialize(value) for key, value in item.items()}
 
@@ -217,4 +302,6 @@ class DynamoDBRequestRepository:
             otp=item.get("otp"),
             otp_expires_at=item.get("otp_expires_at"),
             otp_validated=item.get("otp_validated", False),
+            signed_at=item.get("signed_at"),
+            rejected_at=item.get("rejected_at"),
         )

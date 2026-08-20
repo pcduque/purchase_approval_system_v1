@@ -58,6 +58,36 @@ class FakeRequestRepository:
 
         object.__setattr__(approval, "otp_validated", True)
 
+    def update_approval_decision(
+        self,
+        request_id: str,
+        approver_token: str,
+        status: str,
+        timestamp_field: str,
+        timestamp: str,
+    ) -> None:
+        approval = self.get_approval(request_id, approver_token)
+        if approval is None:
+            return
+
+        object.__setattr__(approval, "status", ApprovalStatus(status))
+        object.__setattr__(approval, timestamp_field, timestamp)
+
+    def reject_approval_and_request(
+        self,
+        request_id: str,
+        approver_token: str,
+        rejected_at: str,
+    ) -> None:
+        approval = self.get_approval(request_id, approver_token)
+        purchase_request = self.get_by_id(request_id)
+        if approval is None or purchase_request is None:
+            return
+
+        object.__setattr__(approval, "status", ApprovalStatus.REJECTED)
+        object.__setattr__(approval, "rejected_at", rejected_at)
+        object.__setattr__(purchase_request, "status", RequestStatus.REJECTED)
+
 
 def valid_payload() -> dict:
     return {
@@ -75,10 +105,13 @@ def valid_payload() -> dict:
 
 def existing_purchase_request(
     request_id: str = "request-1",
+    request_status: RequestStatus = RequestStatus.PENDING,
     approval_status: ApprovalStatus = ApprovalStatus.PENDING,
     include_otp: bool = False,
     otp_expired: bool = False,
     otp_validated: bool = False,
+    signed_at: str | None = None,
+    rejected_at: str | None = None,
 ) -> PurchaseRequest:
     if include_otp and otp_expired:
         otp_expires_at = "2020-01-01T00:00:00+00:00"
@@ -92,7 +125,7 @@ def existing_purchase_request(
         description="Computador para el equipo de desarrollo",
         amount=5000000,
         requester_name="Pablo Duque",
-        status=RequestStatus.PENDING,
+        status=request_status,
         created_at="2026-08-19T15:00:00+00:00",
         approvers=[
             Approver(
@@ -103,6 +136,8 @@ def existing_purchase_request(
                 otp="111111" if include_otp else None,
                 otp_expires_at=otp_expires_at,
                 otp_validated=otp_validated,
+                signed_at=signed_at,
+                rejected_at=rejected_at,
             ),
             Approver(
                 name="Maria Lopez",
@@ -112,6 +147,8 @@ def existing_purchase_request(
                 otp="222222" if include_otp else None,
                 otp_expires_at=otp_expires_at,
                 otp_validated=otp_validated,
+                signed_at=signed_at,
+                rejected_at=rejected_at,
             ),
             Approver(
                 name="Carlos Ruiz",
@@ -121,6 +158,8 @@ def existing_purchase_request(
                 otp="333333" if include_otp else None,
                 otp_expires_at=otp_expires_at,
                 otp_validated=otp_validated,
+                signed_at=signed_at,
+                rejected_at=rejected_at,
             ),
         ],
     )
@@ -722,6 +761,623 @@ def test_approval_detail_does_not_return_otp_expires_at() -> None:
     )
 
     assert response.status_code == 200
+    assert "otp_expires_at" not in response.json()
+
+    app.dependency_overrides.clear()
+
+
+def test_approve_changes_status_to_signed() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(
+        existing_purchase_request(include_otp=True, otp_validated=True)
+    )
+    client = make_client(repository)
+
+    response = client.post(
+        "/api/approvals/approve",
+        json={"request_id": "request-1", "approver_token": "request-1-token-1"},
+    )
+
+    approval = repository.get_approval("request-1", "request-1-token-1")
+    assert response.status_code == 200
+    assert approval is not None
+    assert approval.status == ApprovalStatus.SIGNED
+    assert response.json()["status"] == "SIGNED"
+
+    app.dependency_overrides.clear()
+
+
+def test_approve_generates_signed_at() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(
+        existing_purchase_request(include_otp=True, otp_validated=True)
+    )
+    client = make_client(repository)
+
+    response = client.post(
+        "/api/approvals/approve",
+        json={"request_id": "request-1", "approver_token": "request-1-token-1"},
+    )
+
+    approval = repository.get_approval("request-1", "request-1-token-1")
+    assert response.status_code == 200
+    assert approval is not None
+    assert approval.signed_at is not None
+    assert response.json()["signed_at"] == approval.signed_at
+
+    app.dependency_overrides.clear()
+
+
+def test_signed_at_is_utc() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(
+        existing_purchase_request(include_otp=True, otp_validated=True)
+    )
+    client = make_client(repository)
+
+    response = client.post(
+        "/api/approvals/approve",
+        json={"request_id": "request-1", "approver_token": "request-1-token-1"},
+    )
+
+    assert response.status_code == 200
+    signed_at = datetime.fromisoformat(response.json()["signed_at"])
+    assert signed_at.tzinfo is not None
+    assert signed_at.utcoffset().total_seconds() == 0
+
+    app.dependency_overrides.clear()
+
+
+def test_approve_without_validated_otp_returns_403() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(existing_purchase_request(include_otp=True))
+    client = make_client(repository)
+
+    response = client.post(
+        "/api/approvals/approve",
+        json={"request_id": "request-1", "approver_token": "request-1-token-1"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "OTP has not been validated"
+
+    app.dependency_overrides.clear()
+
+
+def test_approve_missing_approval_returns_404() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(existing_purchase_request())
+    client = make_client(repository)
+
+    response = client.post(
+        "/api/approvals/approve",
+        json={"request_id": "request-1", "approver_token": "missing-token"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Approval not found"
+
+    app.dependency_overrides.clear()
+
+
+def test_approve_already_signed_returns_409() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(
+        existing_purchase_request(
+            approval_status=ApprovalStatus.SIGNED,
+            include_otp=True,
+            otp_validated=True,
+            signed_at="2026-08-20T20:40:00+00:00",
+        )
+    )
+    client = make_client(repository)
+
+    response = client.post(
+        "/api/approvals/approve",
+        json={"request_id": "request-1", "approver_token": "request-1-token-1"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Approval is not pending"
+
+    app.dependency_overrides.clear()
+
+
+def test_approve_already_rejected_returns_409() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(
+        existing_purchase_request(
+            approval_status=ApprovalStatus.REJECTED,
+            include_otp=True,
+            otp_validated=True,
+            rejected_at="2026-08-20T20:40:00+00:00",
+        )
+    )
+    client = make_client(repository)
+
+    response = client.post(
+        "/api/approvals/approve",
+        json={"request_id": "request-1", "approver_token": "request-1-token-1"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Approval is not pending"
+
+    app.dependency_overrides.clear()
+
+
+def test_reject_changes_status_to_rejected() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(
+        existing_purchase_request(include_otp=True, otp_validated=True)
+    )
+    client = make_client(repository)
+
+    response = client.post(
+        "/api/approvals/reject",
+        json={"request_id": "request-1", "approver_token": "request-1-token-1"},
+    )
+
+    approval = repository.get_approval("request-1", "request-1-token-1")
+    assert response.status_code == 200
+    assert approval is not None
+    assert approval.status == ApprovalStatus.REJECTED
+    assert response.json()["status"] == "REJECTED"
+
+    app.dependency_overrides.clear()
+
+
+def test_reject_generates_rejected_at() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(
+        existing_purchase_request(include_otp=True, otp_validated=True)
+    )
+    client = make_client(repository)
+
+    response = client.post(
+        "/api/approvals/reject",
+        json={"request_id": "request-1", "approver_token": "request-1-token-1"},
+    )
+
+    approval = repository.get_approval("request-1", "request-1-token-1")
+    assert response.status_code == 200
+    assert approval is not None
+    assert approval.rejected_at is not None
+    assert response.json()["rejected_at"] == approval.rejected_at
+
+    app.dependency_overrides.clear()
+
+
+def test_reject_changes_request_status_to_rejected() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(
+        existing_purchase_request(include_otp=True, otp_validated=True)
+    )
+    client = make_client(repository)
+
+    response = client.post(
+        "/api/approvals/reject",
+        json={"request_id": "request-1", "approver_token": "request-1-token-1"},
+    )
+
+    purchase_request = repository.get_by_id("request-1")
+    assert response.status_code == 200
+    assert purchase_request is not None
+    assert purchase_request.status == RequestStatus.REJECTED
+
+    app.dependency_overrides.clear()
+
+
+def test_get_request_reflects_rejected_request_status() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(
+        existing_purchase_request(include_otp=True, otp_validated=True)
+    )
+    client = make_client(repository)
+
+    reject_response = client.post(
+        "/api/approvals/reject",
+        json={"request_id": "request-1", "approver_token": "request-1-token-1"},
+    )
+    detail_response = client.get("/api/requests/request-1")
+
+    assert reject_response.status_code == 200
+    assert detail_response.status_code == 200
+    assert detail_response.json()["status"] == "REJECTED"
+
+    app.dependency_overrides.clear()
+
+
+def test_get_request_reflects_rejected_approval_after_global_reject() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(
+        existing_purchase_request(include_otp=True, otp_validated=True)
+    )
+    client = make_client(repository)
+
+    reject_response = client.post(
+        "/api/approvals/reject",
+        json={"request_id": "request-1", "approver_token": "request-1-token-1"},
+    )
+    detail_response = client.get("/api/requests/request-1")
+
+    approver = detail_response.json()["approvers"][0]
+    assert reject_response.status_code == 200
+    assert approver["status"] == "REJECTED"
+    assert approver["rejected_at"] is not None
+
+    app.dependency_overrides.clear()
+
+
+def test_list_requests_reflects_rejected_request_status() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(
+        existing_purchase_request(include_otp=True, otp_validated=True)
+    )
+    client = make_client(repository)
+
+    reject_response = client.post(
+        "/api/approvals/reject",
+        json={"request_id": "request-1", "approver_token": "request-1-token-1"},
+    )
+    list_response = client.get("/api/requests")
+
+    assert reject_response.status_code == 200
+    assert list_response.status_code == 200
+    assert list_response.json()[0]["status"] == "REJECTED"
+
+    app.dependency_overrides.clear()
+
+
+def test_rejected_at_is_utc() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(
+        existing_purchase_request(include_otp=True, otp_validated=True)
+    )
+    client = make_client(repository)
+
+    response = client.post(
+        "/api/approvals/reject",
+        json={"request_id": "request-1", "approver_token": "request-1-token-1"},
+    )
+
+    assert response.status_code == 200
+    rejected_at = datetime.fromisoformat(response.json()["rejected_at"])
+    assert rejected_at.tzinfo is not None
+    assert rejected_at.utcoffset().total_seconds() == 0
+
+    app.dependency_overrides.clear()
+
+
+def test_reject_without_validated_otp_returns_403() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(existing_purchase_request(include_otp=True))
+    client = make_client(repository)
+
+    response = client.post(
+        "/api/approvals/reject",
+        json={"request_id": "request-1", "approver_token": "request-1-token-1"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "OTP has not been validated"
+
+    app.dependency_overrides.clear()
+
+
+def test_reject_missing_approval_returns_404() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(existing_purchase_request())
+    client = make_client(repository)
+
+    response = client.post(
+        "/api/approvals/reject",
+        json={"request_id": "request-1", "approver_token": "missing-token"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Approval not found"
+
+    app.dependency_overrides.clear()
+
+
+def test_reject_already_signed_returns_409() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(
+        existing_purchase_request(
+            approval_status=ApprovalStatus.SIGNED,
+            include_otp=True,
+            otp_validated=True,
+            signed_at="2026-08-20T20:40:00+00:00",
+        )
+    )
+    client = make_client(repository)
+
+    response = client.post(
+        "/api/approvals/reject",
+        json={"request_id": "request-1", "approver_token": "request-1-token-1"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Approval is not pending"
+
+    app.dependency_overrides.clear()
+
+
+def test_reject_already_rejected_returns_409() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(
+        existing_purchase_request(
+            approval_status=ApprovalStatus.REJECTED,
+            include_otp=True,
+            otp_validated=True,
+            rejected_at="2026-08-20T20:40:00+00:00",
+        )
+    )
+    client = make_client(repository)
+
+    response = client.post(
+        "/api/approvals/reject",
+        json={"request_id": "request-1", "approver_token": "request-1-token-1"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Approval is not pending"
+
+    app.dependency_overrides.clear()
+
+
+def test_start_returns_409_when_request_already_rejected() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(existing_purchase_request(request_status=RequestStatus.REJECTED))
+    client = make_client(repository)
+
+    response = client.post(
+        "/api/approvals/start",
+        json={"request_id": "request-1", "approver_token": "request-1-token-1"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Request is already rejected"
+
+    app.dependency_overrides.clear()
+
+
+def test_approve_returns_409_when_request_already_rejected() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(
+        existing_purchase_request(
+            request_status=RequestStatus.REJECTED,
+            include_otp=True,
+            otp_validated=True,
+        )
+    )
+    client = make_client(repository)
+
+    response = client.post(
+        "/api/approvals/approve",
+        json={"request_id": "request-1", "approver_token": "request-1-token-1"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Request is already rejected"
+
+    app.dependency_overrides.clear()
+
+
+def test_reject_returns_409_when_request_already_rejected() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(
+        existing_purchase_request(
+            request_status=RequestStatus.REJECTED,
+            include_otp=True,
+            otp_validated=True,
+        )
+    )
+    client = make_client(repository)
+
+    response = client.post(
+        "/api/approvals/reject",
+        json={"request_id": "request-1", "approver_token": "request-1-token-2"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Request is already rejected"
+
+    app.dependency_overrides.clear()
+
+
+def test_signed_approval_does_not_change_request_to_rejected() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(
+        existing_purchase_request(include_otp=True, otp_validated=True)
+    )
+    client = make_client(repository)
+
+    response = client.post(
+        "/api/approvals/approve",
+        json={"request_id": "request-1", "approver_token": "request-1-token-1"},
+    )
+
+    purchase_request = repository.get_by_id("request-1")
+    assert response.status_code == 200
+    assert purchase_request is not None
+    assert purchase_request.status == RequestStatus.PENDING
+
+    app.dependency_overrides.clear()
+
+
+def test_one_signed_and_two_pending_keeps_request_pending() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(
+        existing_purchase_request(include_otp=True, otp_validated=True)
+    )
+    client = make_client(repository)
+
+    response = client.post(
+        "/api/approvals/approve",
+        json={"request_id": "request-1", "approver_token": "request-1-token-1"},
+    )
+
+    purchase_request = repository.get_by_id("request-1")
+    assert response.status_code == 200
+    assert purchase_request is not None
+    assert purchase_request.status == RequestStatus.PENDING
+    assert [approver.status for approver in purchase_request.approvers] == [
+        ApprovalStatus.SIGNED,
+        ApprovalStatus.PENDING,
+        ApprovalStatus.PENDING,
+    ]
+
+    app.dependency_overrides.clear()
+
+
+def test_two_signed_and_one_pending_keeps_request_pending() -> None:
+    repository = FakeRequestRepository()
+    purchase_request = existing_purchase_request(include_otp=True, otp_validated=True)
+    object.__setattr__(purchase_request.approvers[0], "status", ApprovalStatus.SIGNED)
+    object.__setattr__(
+        purchase_request.approvers[0],
+        "signed_at",
+        "2026-08-20T20:40:00+00:00",
+    )
+    repository.requests.append(purchase_request)
+    client = make_client(repository)
+
+    response = client.post(
+        "/api/approvals/approve",
+        json={"request_id": "request-1", "approver_token": "request-1-token-2"},
+    )
+
+    assert response.status_code == 200
+    assert purchase_request.status == RequestStatus.PENDING
+    assert [approver.status for approver in purchase_request.approvers] == [
+        ApprovalStatus.SIGNED,
+        ApprovalStatus.SIGNED,
+        ApprovalStatus.PENDING,
+    ]
+
+    app.dependency_overrides.clear()
+
+
+def test_three_signed_are_detected() -> None:
+    repository = FakeRequestRepository()
+    purchase_request = existing_purchase_request(include_otp=True, otp_validated=True)
+    for approver in purchase_request.approvers[:2]:
+        object.__setattr__(approver, "status", ApprovalStatus.SIGNED)
+        object.__setattr__(approver, "signed_at", "2026-08-20T20:40:00+00:00")
+    repository.requests.append(purchase_request)
+    client = make_client(repository)
+
+    response = client.post(
+        "/api/approvals/approve",
+        json={"request_id": "request-1", "approver_token": "request-1-token-3"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["all_approvals_signed"] is True
+
+    app.dependency_overrides.clear()
+
+
+def test_three_signed_do_not_change_request_to_completed_yet() -> None:
+    repository = FakeRequestRepository()
+    purchase_request = existing_purchase_request(include_otp=True, otp_validated=True)
+    for approver in purchase_request.approvers[:2]:
+        object.__setattr__(approver, "status", ApprovalStatus.SIGNED)
+        object.__setattr__(approver, "signed_at", "2026-08-20T20:40:00+00:00")
+    repository.requests.append(purchase_request)
+    client = make_client(repository)
+
+    response = client.post(
+        "/api/approvals/approve",
+        json={"request_id": "request-1", "approver_token": "request-1-token-3"},
+    )
+
+    assert response.status_code == 200
+    assert purchase_request.status == RequestStatus.PENDING
+    assert purchase_request.status != RequestStatus.COMPLETED
+
+    app.dependency_overrides.clear()
+
+
+def test_get_request_detail_reflects_signed_approval() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(
+        existing_purchase_request(include_otp=True, otp_validated=True)
+    )
+    client = make_client(repository)
+
+    approve_response = client.post(
+        "/api/approvals/approve",
+        json={"request_id": "request-1", "approver_token": "request-1-token-1"},
+    )
+    detail_response = client.get("/api/requests/request-1")
+
+    assert approve_response.status_code == 200
+    assert detail_response.status_code == 200
+    approver = detail_response.json()["approvers"][0]
+    assert approver["status"] == "SIGNED"
+    assert approver["signed_at"] is not None
+
+    app.dependency_overrides.clear()
+
+
+def test_get_request_detail_reflects_rejected_approval() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(
+        existing_purchase_request(include_otp=True, otp_validated=True)
+    )
+    client = make_client(repository)
+
+    reject_response = client.post(
+        "/api/approvals/reject",
+        json={"request_id": "request-1", "approver_token": "request-1-token-1"},
+    )
+    detail_response = client.get("/api/requests/request-1")
+
+    assert reject_response.status_code == 200
+    assert detail_response.status_code == 200
+    approver = detail_response.json()["approvers"][0]
+    assert approver["status"] == "REJECTED"
+    assert approver["rejected_at"] is not None
+
+    app.dependency_overrides.clear()
+
+
+def test_approve_response_does_not_expose_otp() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(
+        existing_purchase_request(include_otp=True, otp_validated=True)
+    )
+    client = make_client(repository)
+
+    response = client.post(
+        "/api/approvals/approve",
+        json={"request_id": "request-1", "approver_token": "request-1-token-1"},
+    )
+
+    assert response.status_code == 200
+    assert "otp" not in response.json()
+    assert "otp_expires_at" not in response.json()
+
+    app.dependency_overrides.clear()
+
+
+def test_reject_response_does_not_expose_otp() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(
+        existing_purchase_request(include_otp=True, otp_validated=True)
+    )
+    client = make_client(repository)
+
+    response = client.post(
+        "/api/approvals/reject",
+        json={"request_id": "request-1", "approver_token": "request-1-token-1"},
+    )
+
+    assert response.status_code == 200
+    assert "otp" not in response.json()
     assert "otp_expires_at" not in response.json()
 
     app.dependency_overrides.clear()

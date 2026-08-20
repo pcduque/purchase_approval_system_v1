@@ -45,6 +45,8 @@ class ApproverResponse(BaseModel):
     email: EmailStr
     approver_token: str
     status: str
+    signed_at: str | None = None
+    rejected_at: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -115,3 +117,18 @@ class ApprovalDetailResponse(BaseModel):
     created_at: str
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ApprovalDecisionRequest(BaseModel):
+    request_id: str
+    approver_token: str
+
+
+class ApprovalActionResponse(BaseModel):
+    message: str
+    request_id: str
+    approver_token: str
+    status: str
+    signed_at: str | None = None
+    rejected_at: str | None = None
+    all_approvals_signed: bool | None = None

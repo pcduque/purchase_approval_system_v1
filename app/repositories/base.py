@@ -27,3 +27,21 @@ class RequestRepository(Protocol):
 
     def mark_otp_validated(self, request_id: str, approver_token: str) -> None:
         ...
+
+    def update_approval_decision(
+        self,
+        request_id: str,
+        approver_token: str,
+        status: str,
+        timestamp_field: str,
+        timestamp: str,
+    ) -> None:
+        ...
+
+    def reject_approval_and_request(
+        self,
+        request_id: str,
+        approver_token: str,
+        rejected_at: str,
+    ) -> None:
+        ...
