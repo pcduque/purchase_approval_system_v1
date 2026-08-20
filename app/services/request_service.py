@@ -32,3 +32,9 @@ class RequestService:
 
         self._repository.save(purchase_request)
         return purchase_request
+
+    def list_requests(self) -> list[PurchaseRequest]:
+        return self._repository.list_requests()
+
+    def get_request(self, request_id: str) -> PurchaseRequest | None:
+        return self._repository.get_by_id(request_id)

@@ -49,6 +49,18 @@ class ApproverResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class PurchaseRequestSummaryResponse(BaseModel):
+    request_id: str
+    title: str
+    description: str
+    amount: float
+    requester_name: str
+    status: str
+    created_at: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class PurchaseRequestResponse(BaseModel):
     request_id: str
     title: str
