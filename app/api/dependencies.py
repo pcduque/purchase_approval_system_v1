@@ -19,5 +19,9 @@ def get_repository(settings: Settings = Depends(get_settings)) -> RequestReposit
 
 def get_request_service(
     repository: RequestRepository = Depends(get_repository),
+    settings: Settings = Depends(get_settings),
 ) -> RequestService:
-    return RequestService(repository=repository)
+    return RequestService(
+        repository=repository,
+        approval_base_url=settings.approval_base_url,
+    )

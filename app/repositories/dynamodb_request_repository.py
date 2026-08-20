@@ -43,6 +43,11 @@ class DynamoDBRequestRepository:
                 "email": approver.email,
                 "status": approver.status.value,
             }
+            if approver.otp is not None:
+                approval_item["otp"] = approver.otp
+            if approver.otp_expires_at is not None:
+                approval_item["otp_expires_at"] = approver.otp_expires_at
+            approval_item["otp_validated"] = approver.otp_validated
             transact_items.append(
                 {
                     "Put": {
@@ -103,6 +108,76 @@ class DynamoDBRequestRepository:
             approvers=approvers,
         )
 
+    def get_approval(self, request_id: str, approver_token: str) -> Approver | None:
+        try:
+            response = self._client.get_item(
+                TableName=self._settings.approvals_table_name,
+                Key=self._serialize_item(
+                    {
+                        "request_id": request_id,
+                        "approver_token": approver_token,
+                    }
+                ),
+            )
+        except ClientError as exc:
+            raise RuntimeError("DynamoDB could not get purchase approval") from exc
+
+        item = response.get("Item")
+        if item is None:
+            return None
+
+        return self._build_approver(self._deserialize_item(item))
+
+    def update_approval_otp(
+        self,
+        request_id: str,
+        approver_token: str,
+        otp: str,
+        otp_expires_at: str,
+    ) -> None:
+        try:
+            self._client.update_item(
+                TableName=self._settings.approvals_table_name,
+                Key=self._serialize_item(
+                    {
+                        "request_id": request_id,
+                        "approver_token": approver_token,
+                    }
+                ),
+                UpdateExpression=(
+                    "SET otp = :otp, "
+                    "otp_expires_at = :otp_expires_at, "
+                    "otp_validated = :otp_validated"
+                ),
+                ExpressionAttributeValues=self._serialize_item(
+                    {
+                        ":otp": otp,
+                        ":otp_expires_at": otp_expires_at,
+                        ":otp_validated": False,
+                    }
+                ),
+            )
+        except ClientError as exc:
+            raise RuntimeError("DynamoDB could not update approval OTP") from exc
+
+    def mark_otp_validated(self, request_id: str, approver_token: str) -> None:
+        try:
+            self._client.update_item(
+                TableName=self._settings.approvals_table_name,
+                Key=self._serialize_item(
+                    {
+                        "request_id": request_id,
+                        "approver_token": approver_token,
+                    }
+                ),
+                UpdateExpression="SET otp_validated = :otp_validated",
+                ExpressionAttributeValues=self._serialize_item(
+                    {":otp_validated": True}
+                ),
+            )
+        except ClientError as exc:
+            raise RuntimeError("DynamoDB could not mark OTP as validated") from exc
+
     def _serialize_item(self, item: dict) -> dict:
         return {key: self._serializer.serialize(value) for key, value in item.items()}
 
@@ -139,4 +214,7 @@ class DynamoDBRequestRepository:
             email=item["email"],
             approver_token=item["approver_token"],
             status=ApprovalStatus(item["status"]),
+            otp=item.get("otp"),
+            otp_expires_at=item.get("otp_expires_at"),
+            otp_validated=item.get("otp_validated", False),
         )

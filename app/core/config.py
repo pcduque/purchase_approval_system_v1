@@ -10,3 +10,9 @@ class Settings:
     approvals_table_name: str = field(
         default_factory=lambda: os.getenv("APPROVALS_TABLE_NAME", "purchase_approvals")
     )
+    approval_base_url: str = field(
+        default_factory=lambda: os.getenv(
+            "APPROVAL_BASE_URL",
+            "http://localhost:3000/approve",
+        )
+    )

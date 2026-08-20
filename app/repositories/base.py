@@ -1,6 +1,6 @@
 from typing import Protocol
 
-from app.models.request import PurchaseRequest
+from app.models.request import Approver, PurchaseRequest
 
 
 class RequestRepository(Protocol):
@@ -11,4 +11,19 @@ class RequestRepository(Protocol):
         ...
 
     def get_by_id(self, request_id: str) -> PurchaseRequest | None:
+        ...
+
+    def get_approval(self, request_id: str, approver_token: str) -> Approver | None:
+        ...
+
+    def update_approval_otp(
+        self,
+        request_id: str,
+        approver_token: str,
+        otp: str,
+        otp_expires_at: str,
+    ) -> None:
+        ...
+
+    def mark_otp_validated(self, request_id: str, approver_token: str) -> None:
         ...
