@@ -25,6 +25,8 @@ class Approver:
     otp: str | None = None
     otp_expires_at: str | None = None
     otp_validated: bool = False
+    signed_at: str | None = None
+    rejected_at: str | None = None
 
 
 @dataclass(frozen=True)

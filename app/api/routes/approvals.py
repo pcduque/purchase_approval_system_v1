@@ -2,17 +2,21 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.dependencies import get_request_service
 from app.schemas.request import (
+    ApprovalActionResponse,
     ApprovalDetailResponse,
+    ApprovalDecisionRequest,
     ApprovalStartRequest,
     ApprovalStartResponse,
     OtpValidationRequest,
     OtpValidationResponse,
 )
 from app.services.request_service import (
+    ApprovalAlreadyProcessedError,
     ApprovalNotPendingError,
     InvalidOtpError,
     OtpNotStartedError,
     OtpNotValidatedError,
+    RequestAlreadyRejectedError,
     RequestService,
 )
 
@@ -33,6 +37,11 @@ async def start_approval(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Approval is not pending",
+        ) from exc
+    except RequestAlreadyRejectedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Request is already rejected",
         ) from exc
     except RuntimeError as exc:
         raise HTTPException(
@@ -69,6 +78,11 @@ async def validate_otp(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired OTP",
+        ) from exc
+    except RequestAlreadyRejectedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Request is already rejected",
         ) from exc
     except RuntimeError as exc:
         raise HTTPException(
@@ -114,3 +128,91 @@ async def get_approval_detail(
         )
 
     return ApprovalDetailResponse.model_validate(purchase_request)
+
+
+@router.post(
+    "/approve",
+    response_model=ApprovalActionResponse,
+    response_model_exclude_none=True,
+)
+async def approve(
+    payload: ApprovalDecisionRequest,
+    service: RequestService = Depends(get_request_service),
+) -> ApprovalActionResponse:
+    try:
+        result = service.approve(
+            request_id=payload.request_id,
+            approver_token=payload.approver_token,
+        )
+    except OtpNotValidatedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="OTP has not been validated",
+        ) from exc
+    except ApprovalAlreadyProcessedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Approval is not pending",
+        ) from exc
+    except RequestAlreadyRejectedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Request is already rejected",
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not approve",
+        ) from exc
+
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Approval not found",
+        )
+
+    return ApprovalActionResponse.model_validate(result)
+
+
+@router.post(
+    "/reject",
+    response_model=ApprovalActionResponse,
+    response_model_exclude_none=True,
+)
+async def reject(
+    payload: ApprovalDecisionRequest,
+    service: RequestService = Depends(get_request_service),
+) -> ApprovalActionResponse:
+    try:
+        result = service.reject(
+            request_id=payload.request_id,
+            approver_token=payload.approver_token,
+        )
+    except OtpNotValidatedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="OTP has not been validated",
+        ) from exc
+    except ApprovalAlreadyProcessedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Approval is not pending",
+        ) from exc
+    except RequestAlreadyRejectedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Request is already rejected",
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not reject",
+        ) from exc
+
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Approval not found",
+        )
+
+    return ApprovalActionResponse.model_validate(result)
