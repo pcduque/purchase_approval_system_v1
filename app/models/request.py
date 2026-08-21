@@ -39,3 +39,4 @@ class PurchaseRequest:
     status: RequestStatus
     created_at: str
     approvers: list[Approver]
+    evidence_s3_key: str | None = None

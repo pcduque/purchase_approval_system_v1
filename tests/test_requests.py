@@ -3,9 +3,14 @@ from uuid import UUID
 
 from fastapi.testclient import TestClient
 
-from app.api.dependencies import get_repository
+from app.api.dependencies import (
+    get_evidence_repository,
+    get_pdf_service,
+    get_repository,
+)
 from app.main import app
 from app.models.request import ApprovalStatus, Approver, PurchaseRequest, RequestStatus
+from app.services.pdf_service import PdfService
 
 
 class FakeRequestRepository:
@@ -88,6 +93,42 @@ class FakeRequestRepository:
         object.__setattr__(approval, "rejected_at", rejected_at)
         object.__setattr__(purchase_request, "status", RequestStatus.REJECTED)
 
+    def complete_request(self, request_id: str, evidence_s3_key: str) -> None:
+        purchase_request = self.get_by_id(request_id)
+        if purchase_request is None:
+            return
+
+        object.__setattr__(purchase_request, "status", RequestStatus.COMPLETED)
+        object.__setattr__(purchase_request, "evidence_s3_key", evidence_s3_key)
+
+
+class FakePdfService:
+    def __init__(self, should_fail: bool = False) -> None:
+        self.should_fail = should_fail
+        self.generated_requests: list[str] = []
+
+    def generate_evidence(self, purchase_request: PurchaseRequest) -> bytes:
+        if self.should_fail:
+            raise RuntimeError("PDF generation failed")
+        self.generated_requests.append(purchase_request.request_id)
+        return b"%PDF-1.4 fake evidence"
+
+
+class FakeEvidenceRepository:
+    def __init__(self, should_fail_upload: bool = False) -> None:
+        self.should_fail_upload = should_fail_upload
+        self.storage: dict[str, bytes] = {}
+        self.uploaded_keys: list[str] = []
+
+    def upload_pdf(self, key: str, pdf_bytes: bytes) -> None:
+        if self.should_fail_upload:
+            raise RuntimeError("S3 upload failed")
+        self.uploaded_keys.append(key)
+        self.storage[key] = pdf_bytes
+
+    def get_pdf(self, key: str) -> bytes:
+        return self.storage[key]
+
 
 def valid_payload() -> dict:
     return {
@@ -112,6 +153,7 @@ def existing_purchase_request(
     otp_validated: bool = False,
     signed_at: str | None = None,
     rejected_at: str | None = None,
+    evidence_s3_key: str | None = None,
 ) -> PurchaseRequest:
     if include_otp and otp_expired:
         otp_expires_at = "2020-01-01T00:00:00+00:00"
@@ -127,6 +169,7 @@ def existing_purchase_request(
         requester_name="Pablo Duque",
         status=request_status,
         created_at="2026-08-19T15:00:00+00:00",
+        evidence_s3_key=evidence_s3_key,
         approvers=[
             Approver(
                 name="Juan Perez",
@@ -165,8 +208,16 @@ def existing_purchase_request(
     )
 
 
-def make_client(repository: FakeRequestRepository) -> TestClient:
+def make_client(
+    repository: FakeRequestRepository,
+    pdf_service: FakePdfService | None = None,
+    evidence_repository: FakeEvidenceRepository | None = None,
+) -> TestClient:
+    pdf_service = pdf_service or FakePdfService()
+    evidence_repository = evidence_repository or FakeEvidenceRepository()
     app.dependency_overrides[get_repository] = lambda: repository
+    app.dependency_overrides[get_pdf_service] = lambda: pdf_service
+    app.dependency_overrides[get_evidence_repository] = lambda: evidence_repository
     return TestClient(app)
 
 
@@ -1280,7 +1331,155 @@ def test_three_signed_are_detected() -> None:
     app.dependency_overrides.clear()
 
 
-def test_three_signed_do_not_change_request_to_completed_yet() -> None:
+def test_three_signed_change_request_to_completed_after_evidence_upload() -> None:
+    repository = FakeRequestRepository()
+    purchase_request = existing_purchase_request(include_otp=True, otp_validated=True)
+    for approver in purchase_request.approvers[:2]:
+        object.__setattr__(approver, "status", ApprovalStatus.SIGNED)
+        object.__setattr__(approver, "signed_at", "2026-08-20T20:40:00+00:00")
+    repository.requests.append(purchase_request)
+    evidence_repository = FakeEvidenceRepository()
+    client = make_client(repository, evidence_repository=evidence_repository)
+
+    response = client.post(
+        "/api/approvals/approve",
+        json={"request_id": "request-1", "approver_token": "request-1-token-3"},
+    )
+
+    assert response.status_code == 200
+    assert purchase_request.status == RequestStatus.COMPLETED
+    assert purchase_request.evidence_s3_key == "evidence/request-1.pdf"
+    assert evidence_repository.uploaded_keys == ["evidence/request-1.pdf"]
+
+    app.dependency_overrides.clear()
+
+
+def test_one_signed_does_not_generate_pdf() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(
+        existing_purchase_request(include_otp=True, otp_validated=True)
+    )
+    pdf_service = FakePdfService()
+    client = make_client(repository, pdf_service=pdf_service)
+
+    response = client.post(
+        "/api/approvals/approve",
+        json={"request_id": "request-1", "approver_token": "request-1-token-1"},
+    )
+
+    assert response.status_code == 200
+    assert pdf_service.generated_requests == []
+
+    app.dependency_overrides.clear()
+
+
+def test_two_signed_do_not_generate_pdf() -> None:
+    repository = FakeRequestRepository()
+    purchase_request = existing_purchase_request(include_otp=True, otp_validated=True)
+    object.__setattr__(purchase_request.approvers[0], "status", ApprovalStatus.SIGNED)
+    object.__setattr__(purchase_request.approvers[0], "signed_at", "2026-08-20T20:40:00+00:00")
+    repository.requests.append(purchase_request)
+    pdf_service = FakePdfService()
+    client = make_client(repository, pdf_service=pdf_service)
+
+    response = client.post(
+        "/api/approvals/approve",
+        json={"request_id": "request-1", "approver_token": "request-1-token-2"},
+    )
+
+    assert response.status_code == 200
+    assert pdf_service.generated_requests == []
+
+    app.dependency_overrides.clear()
+
+
+def test_third_signed_generates_pdf() -> None:
+    repository = FakeRequestRepository()
+    purchase_request = existing_purchase_request(include_otp=True, otp_validated=True)
+    for approver in purchase_request.approvers[:2]:
+        object.__setattr__(approver, "status", ApprovalStatus.SIGNED)
+        object.__setattr__(approver, "signed_at", "2026-08-20T20:40:00+00:00")
+    repository.requests.append(purchase_request)
+    pdf_service = FakePdfService()
+    client = make_client(repository, pdf_service=pdf_service)
+
+    response = client.post(
+        "/api/approvals/approve",
+        json={"request_id": "request-1", "approver_token": "request-1-token-3"},
+    )
+
+    assert response.status_code == 200
+    assert pdf_service.generated_requests == ["request-1"]
+
+    app.dependency_overrides.clear()
+
+
+def test_pdf_service_generates_bytes() -> None:
+    pdf_bytes = PdfService().generate_evidence(
+        existing_purchase_request(
+            approval_status=ApprovalStatus.SIGNED,
+            signed_at="2026-08-20T20:40:00+00:00",
+        )
+    )
+
+    assert isinstance(pdf_bytes, bytes)
+
+
+def test_pdf_service_generates_non_empty_pdf() -> None:
+    pdf_bytes = PdfService().generate_evidence(
+        existing_purchase_request(
+            approval_status=ApprovalStatus.SIGNED,
+            signed_at="2026-08-20T20:40:00+00:00",
+        )
+    )
+
+    assert len(pdf_bytes) > 0
+    assert pdf_bytes.startswith(b"%PDF")
+
+
+def test_upload_pdf_is_called_when_three_approvals_are_signed() -> None:
+    repository = FakeRequestRepository()
+    purchase_request = existing_purchase_request(include_otp=True, otp_validated=True)
+    for approver in purchase_request.approvers[:2]:
+        object.__setattr__(approver, "status", ApprovalStatus.SIGNED)
+        object.__setattr__(approver, "signed_at", "2026-08-20T20:40:00+00:00")
+    repository.requests.append(purchase_request)
+    evidence_repository = FakeEvidenceRepository()
+    client = make_client(repository, evidence_repository=evidence_repository)
+
+    response = client.post(
+        "/api/approvals/approve",
+        json={"request_id": "request-1", "approver_token": "request-1-token-3"},
+    )
+
+    assert response.status_code == 200
+    assert evidence_repository.uploaded_keys == ["evidence/request-1.pdf"]
+
+    app.dependency_overrides.clear()
+
+
+def test_evidence_key_uses_request_id() -> None:
+    repository = FakeRequestRepository()
+    purchase_request = existing_purchase_request(request_id="abc-123", include_otp=True, otp_validated=True)
+    for approver in purchase_request.approvers[:2]:
+        object.__setattr__(approver, "status", ApprovalStatus.SIGNED)
+        object.__setattr__(approver, "signed_at", "2026-08-20T20:40:00+00:00")
+    repository.requests.append(purchase_request)
+    evidence_repository = FakeEvidenceRepository()
+    client = make_client(repository, evidence_repository=evidence_repository)
+
+    response = client.post(
+        "/api/approvals/approve",
+        json={"request_id": "abc-123", "approver_token": "abc-123-token-3"},
+    )
+
+    assert response.status_code == 200
+    assert evidence_repository.uploaded_keys == ["evidence/abc-123.pdf"]
+
+    app.dependency_overrides.clear()
+
+
+def test_successful_upload_changes_request_to_completed() -> None:
     repository = FakeRequestRepository()
     purchase_request = existing_purchase_request(include_otp=True, otp_validated=True)
     for approver in purchase_request.approvers[:2]:
@@ -1295,8 +1494,213 @@ def test_three_signed_do_not_change_request_to_completed_yet() -> None:
     )
 
     assert response.status_code == 200
+    assert purchase_request.status == RequestStatus.COMPLETED
+
+    app.dependency_overrides.clear()
+
+
+def test_successful_upload_stores_evidence_s3_key() -> None:
+    repository = FakeRequestRepository()
+    purchase_request = existing_purchase_request(include_otp=True, otp_validated=True)
+    for approver in purchase_request.approvers[:2]:
+        object.__setattr__(approver, "status", ApprovalStatus.SIGNED)
+        object.__setattr__(approver, "signed_at", "2026-08-20T20:40:00+00:00")
+    repository.requests.append(purchase_request)
+    client = make_client(repository)
+
+    response = client.post(
+        "/api/approvals/approve",
+        json={"request_id": "request-1", "approver_token": "request-1-token-3"},
+    )
+
+    assert response.status_code == 200
+    assert purchase_request.evidence_s3_key == "evidence/request-1.pdf"
+
+    app.dependency_overrides.clear()
+
+
+def test_pdf_generation_failure_does_not_complete_request() -> None:
+    repository = FakeRequestRepository()
+    purchase_request = existing_purchase_request(include_otp=True, otp_validated=True)
+    for approver in purchase_request.approvers[:2]:
+        object.__setattr__(approver, "status", ApprovalStatus.SIGNED)
+        object.__setattr__(approver, "signed_at", "2026-08-20T20:40:00+00:00")
+    repository.requests.append(purchase_request)
+    client = make_client(repository, pdf_service=FakePdfService(should_fail=True))
+
+    response = client.post(
+        "/api/approvals/approve",
+        json={"request_id": "request-1", "approver_token": "request-1-token-3"},
+    )
+
+    assert response.status_code == 503
     assert purchase_request.status == RequestStatus.PENDING
-    assert purchase_request.status != RequestStatus.COMPLETED
+    assert purchase_request.evidence_s3_key is None
+
+    app.dependency_overrides.clear()
+
+
+def test_s3_upload_failure_does_not_complete_request() -> None:
+    repository = FakeRequestRepository()
+    purchase_request = existing_purchase_request(include_otp=True, otp_validated=True)
+    for approver in purchase_request.approvers[:2]:
+        object.__setattr__(approver, "status", ApprovalStatus.SIGNED)
+        object.__setattr__(approver, "signed_at", "2026-08-20T20:40:00+00:00")
+    repository.requests.append(purchase_request)
+    evidence_repository = FakeEvidenceRepository(should_fail_upload=True)
+    client = make_client(repository, evidence_repository=evidence_repository)
+
+    response = client.post(
+        "/api/approvals/approve",
+        json={"request_id": "request-1", "approver_token": "request-1-token-3"},
+    )
+
+    assert response.status_code == 503
+    assert purchase_request.status == RequestStatus.PENDING
+    assert purchase_request.evidence_s3_key is None
+
+    app.dependency_overrides.clear()
+
+
+def test_rejected_request_does_not_generate_evidence() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(
+        existing_purchase_request(
+            request_status=RequestStatus.REJECTED,
+            include_otp=True,
+            otp_validated=True,
+        )
+    )
+    pdf_service = FakePdfService()
+    client = make_client(repository, pdf_service=pdf_service)
+
+    response = client.post(
+        "/api/approvals/approve",
+        json={"request_id": "request-1", "approver_token": "request-1-token-1"},
+    )
+
+    assert response.status_code == 409
+    assert pdf_service.generated_requests == []
+
+    app.dependency_overrides.clear()
+
+
+def test_completed_request_does_not_generate_evidence_again() -> None:
+    repository = FakeRequestRepository()
+    purchase_request = existing_purchase_request(
+        request_status=RequestStatus.COMPLETED,
+        include_otp=True,
+        otp_validated=True,
+        evidence_s3_key="evidence/request-1.pdf",
+    )
+    for approver in purchase_request.approvers[:2]:
+        object.__setattr__(approver, "status", ApprovalStatus.SIGNED)
+    repository.requests.append(purchase_request)
+    pdf_service = FakePdfService()
+    client = make_client(repository, pdf_service=pdf_service)
+
+    response = client.post(
+        "/api/approvals/approve",
+        json={"request_id": "request-1", "approver_token": "request-1-token-3"},
+    )
+
+    assert response.status_code == 200
+    assert pdf_service.generated_requests == []
+
+    app.dependency_overrides.clear()
+
+
+def test_evidence_endpoint_missing_request_returns_404() -> None:
+    repository = FakeRequestRepository()
+    client = make_client(repository)
+
+    response = client.get("/api/requests/missing-request/evidence.pdf")
+
+    assert response.status_code == 404
+
+    app.dependency_overrides.clear()
+
+
+def test_evidence_endpoint_pending_request_returns_409() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(existing_purchase_request())
+    client = make_client(repository)
+
+    response = client.get("/api/requests/request-1/evidence.pdf")
+
+    assert response.status_code == 409
+
+    app.dependency_overrides.clear()
+
+
+def test_evidence_endpoint_rejected_request_returns_409() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(existing_purchase_request(request_status=RequestStatus.REJECTED))
+    client = make_client(repository)
+
+    response = client.get("/api/requests/request-1/evidence.pdf")
+
+    assert response.status_code == 409
+
+    app.dependency_overrides.clear()
+
+
+def test_evidence_endpoint_completed_request_returns_pdf() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(
+        existing_purchase_request(
+            request_status=RequestStatus.COMPLETED,
+            evidence_s3_key="evidence/request-1.pdf",
+        )
+    )
+    evidence_repository = FakeEvidenceRepository()
+    evidence_repository.storage["evidence/request-1.pdf"] = b"%PDF-1.4 evidence"
+    client = make_client(repository, evidence_repository=evidence_repository)
+
+    response = client.get("/api/requests/request-1/evidence.pdf")
+
+    assert response.status_code == 200
+    assert response.content == b"%PDF-1.4 evidence"
+
+    app.dependency_overrides.clear()
+
+
+def test_evidence_endpoint_content_type_is_pdf() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(
+        existing_purchase_request(
+            request_status=RequestStatus.COMPLETED,
+            evidence_s3_key="evidence/request-1.pdf",
+        )
+    )
+    evidence_repository = FakeEvidenceRepository()
+    evidence_repository.storage["evidence/request-1.pdf"] = b"%PDF-1.4 evidence"
+    client = make_client(repository, evidence_repository=evidence_repository)
+
+    response = client.get("/api/requests/request-1/evidence.pdf")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+
+    app.dependency_overrides.clear()
+
+
+def test_evidence_endpoint_uses_fake_storage() -> None:
+    repository = FakeRequestRepository()
+    repository.requests.append(
+        existing_purchase_request(
+            request_status=RequestStatus.COMPLETED,
+            evidence_s3_key="evidence/request-1.pdf",
+        )
+    )
+    evidence_repository = FakeEvidenceRepository()
+    evidence_repository.storage["evidence/request-1.pdf"] = b"fake-pdf"
+    client = make_client(repository, evidence_repository=evidence_repository)
+
+    response = client.get("/api/requests/request-1/evidence.pdf")
+
+    assert response.status_code == 200
+    assert response.content == b"fake-pdf"
 
     app.dependency_overrides.clear()
 

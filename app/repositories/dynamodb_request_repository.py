@@ -25,6 +25,8 @@ class DynamoDBRequestRepository:
             "status": purchase_request.status.value,
             "created_at": purchase_request.created_at,
         }
+        if purchase_request.evidence_s3_key is not None:
+            request_item["evidence_s3_key"] = purchase_request.evidence_s3_key
 
         transact_items = [
             {
@@ -263,6 +265,25 @@ class DynamoDBRequestRepository:
         except ClientError as exc:
             raise RuntimeError("DynamoDB could not reject approval and request") from exc
 
+    def complete_request(self, request_id: str, evidence_s3_key: str) -> None:
+        try:
+            self._client.update_item(
+                TableName=self._settings.requests_table_name,
+                Key=self._serialize_item({"request_id": request_id}),
+                UpdateExpression=(
+                    "SET #status = :status, evidence_s3_key = :evidence_s3_key"
+                ),
+                ExpressionAttributeNames={"#status": "status"},
+                ExpressionAttributeValues=self._serialize_item(
+                    {
+                        ":status": RequestStatus.COMPLETED.value,
+                        ":evidence_s3_key": evidence_s3_key,
+                    }
+                ),
+            )
+        except ClientError as exc:
+            raise RuntimeError("DynamoDB could not complete purchase request") from exc
+
     def _serialize_item(self, item: dict) -> dict:
         return {key: self._serializer.serialize(value) for key, value in item.items()}
 
@@ -291,6 +312,7 @@ class DynamoDBRequestRepository:
             status=RequestStatus(item["status"]),
             created_at=item["created_at"],
             approvers=approvers,
+            evidence_s3_key=item.get("evidence_s3_key"),
         )
 
     def _build_approver(self, item: dict) -> Approver:

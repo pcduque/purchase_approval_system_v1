@@ -45,3 +45,6 @@ class RequestRepository(Protocol):
         rejected_at: str,
     ) -> None:
         ...
+
+    def complete_request(self, request_id: str, evidence_s3_key: str) -> None:
+        ...
