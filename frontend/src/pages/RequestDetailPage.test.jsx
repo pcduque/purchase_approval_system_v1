@@ -5,7 +5,8 @@ import RequestDetailPage from './RequestDetailPage'
 import { getRequest } from '../api/api'
 
 vi.mock('../api/api', () => ({
-  getEvidenceUrl: (requestId) => `http://127.0.0.1:8000/api/requests/${requestId}/evidence.pdf`,
+  getEvidenceUrl: (requestId) =>
+    `https://i2ecy353md.execute-api.us-east-2.amazonaws.com/default/api/requests/${requestId}/evidence.pdf`,
   getRequest: vi.fn(),
 }))
 
@@ -73,7 +74,7 @@ describe('RequestDetailPage', () => {
 
     expect(await screen.findByRole('link', { name: 'Descargar evidencia PDF' })).toHaveAttribute(
       'href',
-      'http://127.0.0.1:8000/api/requests/request-1/evidence.pdf',
+      'https://i2ecy353md.execute-api.us-east-2.amazonaws.com/default/api/requests/request-1/evidence.pdf',
     )
   })
 
