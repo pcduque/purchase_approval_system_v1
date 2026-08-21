@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class Settings:
+    root_path: str = field(default_factory=lambda: os.getenv("ROOT_PATH", ""))
     requests_table_name: str = field(
         default_factory=lambda: os.getenv("REQUESTS_TABLE_NAME", "purchase_requests")
     )
