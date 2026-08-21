@@ -41,3 +41,40 @@ export function getRequest(requestId) {
 export function getEvidenceUrl(requestId) {
   return `${API_BASE_URL}/api/requests/${requestId}/evidence.pdf`
 }
+
+export function startApproval(payload) {
+  return request('/api/approvals/start', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function validateApprovalOtp(payload) {
+  return request('/api/approvals/validate-otp', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function getApprovalDetail(requestId, approverToken) {
+  const params = new URLSearchParams({
+    request_id: requestId,
+    approver_token: approverToken,
+  })
+
+  return request(`/api/approvals/detail?${params.toString()}`)
+}
+
+export function approveApproval(payload) {
+  return request('/api/approvals/approve', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function rejectApproval(payload) {
+  return request('/api/approvals/reject', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
