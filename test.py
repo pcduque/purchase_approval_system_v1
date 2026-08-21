@@ -1,14 +1,20 @@
 import boto3
 
-session = boto3.Session()
+s3 = boto3.client("s3")
 
-credentials = session.get_credentials()
+bucket = "purchase-approval-evidence-pcduque"
 
-print("Region:", session.region_name)
-print("Credenciales encontradas:", credentials is not None)
+s3.put_object(
+    Bucket=bucket,
+    Key="test/test.txt",
+    Body=b"hello"
+)
 
-dynamodb = boto3.client("dynamodb")
+print("Subida OK")
 
-response = dynamodb.list_tables()
+response = s3.get_object(
+    Bucket=bucket,
+    Key="test/test.txt"
+)
 
-print("Tablas:", response["TableNames"])
+print(response["Body"].read().decode())

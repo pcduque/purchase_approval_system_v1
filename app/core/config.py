@@ -16,3 +16,9 @@ class Settings:
             "http://localhost:3000/approve",
         )
     )
+    evidence_bucket_name: str = field(
+        default_factory=lambda: os.getenv(
+            "EVIDENCE_BUCKET_NAME",
+            "purchase-approval-evidence-pcduque",
+        )
+    )

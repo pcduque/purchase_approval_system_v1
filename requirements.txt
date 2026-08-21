@@ -5,3 +5,4 @@ email-validator
 pytest
 httpx
 python-dotenv
+reportlab

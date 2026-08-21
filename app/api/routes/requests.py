@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 
 from app.api.dependencies import get_request_service
 from app.schemas.request import (
@@ -6,7 +6,7 @@ from app.schemas.request import (
     PurchaseRequestResponse,
     PurchaseRequestSummaryResponse,
 )
-from app.services.request_service import RequestService
+from app.services.request_service import EvidenceNotAvailableError, RequestService
 
 router = APIRouter(prefix="/requests", tags=["requests"])
 
@@ -27,6 +27,41 @@ async def list_purchase_requests(
         PurchaseRequestSummaryResponse.model_validate(purchase_request)
         for purchase_request in purchase_requests
     ]
+
+
+@router.get("/{request_id}/evidence.pdf")
+async def get_purchase_request_evidence(
+    request_id: str,
+    service: RequestService = Depends(get_request_service),
+) -> Response:
+    try:
+        pdf_bytes = service.get_evidence_pdf(request_id)
+    except EvidenceNotAvailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Purchase request is not completed",
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not get evidence PDF",
+        ) from exc
+
+    if pdf_bytes is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Purchase request not found",
+        )
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="evidence-{request_id}.pdf"'
+            )
+        },
+    )
 
 
 @router.get("/{request_id}", response_model=PurchaseRequestResponse)
