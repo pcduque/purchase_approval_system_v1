@@ -1,0 +1,289 @@
+.app-shell {
+  min-height: 100vh;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 28px 32px;
+  border-bottom: 1px solid var(--border);
+}
+
+.topbar h1 {
+  margin: 4px 0 0;
+  font-size: 30px;
+}
+
+.eyebrow {
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.nav {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.nav a,
+.button,
+.back-link {
+  border-radius: 6px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.nav a {
+  color: var(--text);
+  padding: 8px 12px;
+}
+
+.nav a.active {
+  color: var(--brand);
+  background: var(--brand-soft);
+}
+
+.page-section {
+  padding: 32px;
+}
+
+.section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.section-heading h2,
+.detail-header h2 {
+  margin: 0;
+}
+
+.button {
+  border: 1px solid transparent;
+  cursor: pointer;
+  display: inline-flex;
+  justify-content: center;
+  padding: 10px 14px;
+}
+
+.button.primary {
+  background: var(--brand);
+  color: #fff;
+}
+
+.button.secondary {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text-h);
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.request-list,
+.approvals-list {
+  display: grid;
+  gap: 14px;
+}
+
+.request-card,
+.approval-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 18px;
+  text-align: left;
+}
+
+.request-card {
+  align-items: center;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 1.2fr 1.4fr auto;
+}
+
+.request-card h3,
+.approval-card h4 {
+  color: var(--text-h);
+  margin: 0 0 4px;
+}
+
+.request-meta {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.status {
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 13px;
+  font-weight: 800;
+  padding: 4px 10px;
+}
+
+.status.pending {
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.status.signed,
+.status.completed {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.status.rejected {
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.form {
+  display: grid;
+  gap: 18px;
+  text-align: left;
+}
+
+label {
+  color: var(--text-h);
+  display: grid;
+  font-weight: 700;
+  gap: 6px;
+}
+
+input,
+textarea {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-h);
+  font: inherit;
+  padding: 10px 12px;
+}
+
+textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+
+.approvers-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+fieldset {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 16px;
+}
+
+legend {
+  color: var(--text-h);
+  font-weight: 800;
+}
+
+.state-message,
+.error-message,
+.success-message {
+  border-radius: 8px;
+  padding: 14px;
+  text-align: left;
+}
+
+.state-message {
+  background: var(--surface);
+}
+
+.error-message {
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.success-message {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.back-link {
+  color: var(--brand);
+  display: inline-flex;
+  margin-bottom: 18px;
+}
+
+.detail-header {
+  align-items: flex-start;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+  text-align: left;
+}
+
+.detail-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0 0 24px;
+  text-align: left;
+}
+
+.detail-grid div {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+dt {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+dd {
+  color: var(--text-h);
+  margin: 6px 0 0;
+}
+
+.approvals-section {
+  margin-top: 28px;
+  text-align: left;
+}
+
+.approval-card {
+  display: grid;
+  gap: 10px;
+}
+
+@media (max-width: 780px) {
+  .topbar,
+  .section-heading,
+  .detail-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .request-card,
+  .approvers-grid,
+  .detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .page-section {
+    padding: 24px 18px;
+  }
+}
