@@ -1,5 +1,6 @@
 import { createBrowserRouter, RouterProvider } from 'react-router-dom'
 import Layout from './components/Layout'
+import ApprovalPage from './pages/ApprovalPage'
 import CreateRequestPage from './pages/CreateRequestPage'
 import RequestDetailPage from './pages/RequestDetailPage'
 import RequestsPage from './pages/RequestsPage'
@@ -11,6 +12,7 @@ const router = createBrowserRouter([
     element: <Layout />,
     children: [
       { index: true, element: <RequestsPage /> },
+      { path: 'approve', element: <ApprovalPage /> },
       { path: 'requests/new', element: <CreateRequestPage /> },
       { path: 'requests/:requestId', element: <RequestDetailPage /> },
     ],
